@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MathParser Tycoon - Isometric (8x8 Grid)</title> {/* Changed Title */}
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.min.js"></script>
+    <style>
+        body { display: flex; flex-direction: column; align-items: center; min-height: 100vh; background-color: #f0f4f8; font-family: 'Inter', sans-serif; margin: 0; padding: 20px; box-sizing: border-box; }
+        #game-container { border: 1px solid #ccc; box-shadow: 0 4px 8px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; width: 100%; /* max-width will be set by game config */ }
+        canvas { display: block; border-radius: 8px; }
+        .control-panel { background-color: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-top: 20px; width: 100%; /* max-width will be set by game config */ text-align: center; }
+        .control-panel h2, .control-panel h3 { margin-top: 0; margin-bottom: 0.5rem; color: #333; }
+        .component-button, .action-button { background-color: #4a90e2; border: none; color: white; padding: 8px 12px; text-align: center; text-decoration: none; display: inline-block; font-size: 13px; margin: 4px 2px; cursor: pointer; border-radius: 4px; transition: background-color 0.3s ease, box-shadow 0.2s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .component-button:hover, .action-button:hover { background-color: #357abd; box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
+        .component-button.selected { background-color: #d35400; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); }
+        .component-button:disabled { background-color: #bdc3c7; cursor: not-allowed; box-shadow: none; }
+        .money-display { font-size: 1.25rem; font-weight: bold; color: #27ae60; margin-bottom: 10px; }
+        .slider-container { margin-top: 15px; display: flex; justify-content: center; align-items: center; gap: 15px; flex-wrap: wrap; }
+        .slider-wrapper { display: flex; align-items: center; gap: 8px; }
+        .slider-wrapper label { font-size: 0.9rem; color: #555; min-width: 70px; text-align: right;}
+        .slider-wrapper input[type=range] { width: 150px; cursor: pointer; }
+        .slider-wrapper span { font-size: 0.9rem; color: #333; min-width: 25px; text-align: left; font-weight: 500;}
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+    </style>
+</head>
+<body>
+
+    <h1 class="text-3xl font-bold mb-4 text-center text-gray-800">MathParser Tycoon (Isometric)</h1>
+
+    <div id="game-container"></div>
+
+    <div class="control-panel">
+        <h2 class="text-xl font-semibold">Controls & Status</h2>
+        <div class="money-display">Money: <span id="money-display">$?</span></div>
+
+        <h3 class="text-lg font-medium">Place Component:</h3>
+        <div>
+            <span id="component-buttons-container"></span>
+            <button class="action-button" id="cancel-placement">Cancel</button>
+        </div>
+        <p class="text-sm text-gray-600 mt-1 mb-3">Select a component, then click on the grid to place it.</p>
+
+        <h3 class="text-lg font-medium">Grid Spacing:</h3>
+        <div class="slider-container">
+            <div class="slider-wrapper">
+                <label for="spacingX">X-Spacing:</label>
+                <input type="range" id="spacingX" name="spacingX" min="0" max="32" value="32">
+                <span id="spacingXValue">32</span>
+            </div>
+            <div class="slider-wrapper">
+                <label for="spacingY">Y-Spacing:</label>
+                <input type="range" id="spacingY" name="spacingY" min="0" max="32" value="20">
+                <span id="spacingYValue">20</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Component Type Enum (Define before CONFIG) ---
+        const ComponentType = { NONE: 0, PREPROCESSOR: 1, PARSER: 2, EVALUATOR: 3, FORMATTER: 4 };
+
+        // --- Central Configuration Object ---
+        const CONFIG = {
+            initialMoney: 100,
+            componentSetup: [
+                { name: 'Preprocessor', type: ComponentType.PREPROCESSOR, cost: 10 }, { name: 'Parser', type: ComponentType.PARSER, cost: 15 },
+                { name: 'Evaluator', type: ComponentType.EVALUATOR, cost: 20 }, { name: 'Formatter', type: ComponentType.FORMATTER, cost: 10 },
+            ],
+            workItemProfitBase: 15, workItemProfitRandom: 10, workItemFailurePenaltyBase: 5, workItemFailurePenaltyRandom: 5,
+            workItemSpawnDelay: 5000,
+            processingTimes: {
+                [ComponentType.PREPROCESSOR]: 1500, [ComponentType.PARSER]: 2000, [ComponentType.EVALUATOR]: 2500, [ComponentType.FORMATTER]: 1000,
+                randomFactor: 0.3
+            },
+            searchCooldownBase: 1000, searchCooldownRandom: 1000,
+            grid: {
+                // --- Grid Size Updated ---
+                rows: 8,
+                cols: 8,
+                isoTileWidth: 64, isoTileHeight: 32,
+                tileImageUrl: 'https://raw.githubusercontent.com/kazad/shared/refs/heads/main/img/tile.png',
+                tileImageKey: 'isoTile', originY: 150,
+                defaultSpacingX: 32,
+                defaultSpacingY: 20,
+            },
+            colors: {
+                components: {
+                    [ComponentType.PREPROCESSOR]: 0x4CAF50, [ComponentType.PARSER]: 0x2196F3, [ComponentType.EVALUATOR]: 0xFF9800, [ComponentType.FORMATTER]: 0x9C27B0,
+                },
+                processing: 0xffff00, componentDefaultStroke: 0x555555, labelDefault: '#ffffff', labelStroke: '#000000',
+            },
+            componentPolyScale: 0.45, componentLabelFontSize: '10px', componentLabelStrokeThickness: 2, componentLabelYOffsetFactor: -0.2,
+            workItemSpriteKey: 'workItemBox',
+            // --- Work Item URL Updated to rawgit ---
+            workItemSpriteUrl: 'https://raw.githubusercontent.com/kazad/shared/main/img/box.png',
+            workItemScale: 0.5,
+            workItemYOffsetFactor: -0.2,
+            statusTextClearDelay: 2500,
+            // --- Adjusted game height slightly for smaller grid ---
+            gameWidth: 900, gameHeight: 700, backgroundColor: '#ffffff',
+            depthStep: 10, itemDepthOffset: 1,
+        };
+
+        // --- Global Game State ---
+        let currentMoney = CONFIG.initialMoney;
+        const moneyDisplayElement = document.getElementById('money-display');
+        let selectedComponentType = null;
+        let selectedComponentCost = 0;
+
+        // --- Derived Maps ---
+        const componentTypeMap = {}; const componentCosts = {}; const componentColorMap = {}; const componentStageName = {};
+        CONFIG.componentSetup.forEach(comp => {
+            componentTypeMap[comp.name] = comp.type; componentCosts[comp.name] = comp.cost;
+            componentColorMap[comp.type] = CONFIG.colors.components[comp.type]; componentStageName[comp.type] = comp.name;
+        });
+        const nextStage = {
+             [ComponentType.PREPROCESSOR]: ComponentType.PARSER, [ComponentType.PARSER]: ComponentType.EVALUATOR,
+             [ComponentType.EVALUATOR]: ComponentType.FORMATTER, [ComponentType.FORMATTER]: null,
+        };
+
+        // --- Phaser Scene Definition ---
+        class GameScene extends Phaser.Scene {
+            constructor() {
+                super({ key: 'GameScene' });
+                this.gridConfig = CONFIG.grid;
+                this.grid = [];
+                this.workItems = [];
+                this.workItemSprites = new Map();
+                this.nextWorkItemId = 0;
+                this.spawnTimer = null;
+                this.componentVisuals = new Map();
+                this.tileGroup = null;
+                this.gridSpacingX = CONFIG.grid.defaultSpacingX;
+                this.gridSpacingY = CONFIG.grid.defaultSpacingY;
+            }
+
+            preload() {
+                 this.load.image(CONFIG.grid.tileImageKey, CONFIG.grid.tileImageUrl);
+                 this.load.image(CONFIG.workItemSpriteKey, CONFIG.workItemSpriteUrl);
+            }
+
+            create() {
+                this.gridConfig.originX = CONFIG.gameWidth / 2;
+                this.tileGroup = this.add.group();
+                this.initializeGrid();
+                this.createTileImageGrid();
+                this.input.on('pointerdown', this.handleGridClick, this);
+                this.spawnTimer = this.time.addEvent({ delay: CONFIG.workItemSpawnDelay, callback: this.spawnWorkItem, callbackScope: this, loop: true });
+                this.statusText = this.add.text(10, 10, 'Status: Ready', { fontSize: '16px', color: '#333333', backgroundColor: 'rgba(255,255,255,0.7)', padding: { x: 5, y: 2 } }).setDepth(1000);
+
+                const spacingXSlider = document.getElementById('spacingX');
+                const spacingYSlider = document.getElementById('spacingY');
+                const spacingXValueLabel = document.getElementById('spacingXValue');
+                const spacingYValueLabel = document.getElementById('spacingYValue');
+                spacingXSlider.value = this.gridSpacingX; spacingYSlider.value = this.gridSpacingY;
+                spacingXValueLabel.textContent = this.gridSpacingX; spacingYValueLabel.textContent = this.gridSpacingY;
+                spacingXSlider.addEventListener('input', (event) => { this.gridSpacingX = parseInt(event.target.value, 10); spacingXValueLabel.textContent = this.gridSpacingX; this.redrawGridAndComponents(); });
+                spacingYSlider.addEventListener('input', (event) => { this.gridSpacingY = parseInt(event.target.value, 10); spacingYValueLabel.textContent = this.gridSpacingY; this.redrawGridAndComponents(); });
+            }
+
+            update(time, delta) {
+                 this.workItems.forEach(item => item.update(time, delta, this));
+                 this.workItems = this.workItems.filter(item => { if (item.state === 'completed' || item.state === 'failed') { const sprite = this.workItemSprites.get(item); if (sprite) sprite.destroy(); this.workItemSprites.delete(item); return false; } return true; });
+                 this.children.list.forEach(child => { if (child.getData && child.getData('gridPos')) { const pos = child.getData('gridPos'); const depth = (pos.row + pos.col) * CONFIG.depthStep + (child.type === 'Sprite' || child.type === 'Image' ? CONFIG.itemDepthOffset : 0); child.setDepth(depth); } });
+            }
+
+            getIsoWorldCoords(row, col) { /* ... (same as before) ... */
+                const tileW = this.gridConfig.isoTileWidth; const tileH = this.gridConfig.isoTileHeight; const effectiveTileW = tileW + this.gridSpacingX; const effectiveTileH = tileH + this.gridSpacingY; const screenX = this.gridConfig.originX + (col - row) * (effectiveTileW / 2); const screenY = this.gridConfig.originY + (col + row) * (effectiveTileH / 2); return { x: screenX, y: screenY };
+            }
+            getGridCoordsFromIsoWorld(worldX, worldY) { /* ... (same as before) ... */
+                const tileW = this.gridConfig.isoTileWidth; const tileH = this.gridConfig.isoTileHeight; const effectiveTileW = tileW + this.gridSpacingX; const effectiveTileH = tileH + this.gridSpacingY; const originX = this.gridConfig.originX; const originY = this.gridConfig.originY; const isoX = worldX - originX; const isoY = worldY - originY; const termX = isoX / (effectiveTileW / 2); const termY = isoY / (effectiveTileH / 2); const row_temp = (termY - termX) / 2; const col_temp = (termX + termY) / 2; const row = Math.round(row_temp); const col = Math.round(col_temp); if (row < 0 || row >= this.gridConfig.rows || col < 0 || col >= this.gridConfig.cols) { return null; } return { row, col };
+            }
+            initializeGrid() { /* ... (same as before) ... */
+                this.grid = []; for (let r = 0; r < this.gridConfig.rows; r++) { this.grid[r] = []; for (let c = 0; c < this.gridConfig.cols; c++) { this.grid[r][c] = { type: ComponentType.NONE, originalColor: 0xffffff, isProcessing: false, workItemId: null }; } } console.log("Grid initialized:", this.gridConfig.rows, "x", this.gridConfig.cols);
+            }
+             createTileImageGrid() { /* ... (same as before) ... */
+                 console.log(`Creating grid with image: ${CONFIG.grid.tileImageKey}`); this.tileGroup.clear(true, true); for (let r = 0; r < this.gridConfig.rows; r++) { for (let c = 0; c < this.gridConfig.cols; c++) { const coords = this.getIsoWorldCoords(r, c); const tileImage = this.add.image(coords.x, coords.y, CONFIG.grid.tileImageKey); tileImage.setDepth(0); tileImage.setData('gridPos', { row: r, col: c }); this.tileGroup.add(tileImage); } }
+             }
+            redrawGridAndComponents() { /* ... (same as before) ... */
+                let tileIndex = 0; for (let r = 0; r < this.gridConfig.rows; r++) { for (let c = 0; c < this.gridConfig.cols; c++) { const tileImage = this.tileGroup.getChildren()[tileIndex++]; if (tileImage) { const newCoords = this.getIsoWorldCoords(r, c); tileImage.setPosition(newCoords.x, newCoords.y); } } } this.componentVisuals.forEach((visuals, key) => { const [row, col] = key.split('-').map(Number); const newCoords = this.getIsoWorldCoords(row, col); const tileW = this.gridConfig.isoTileWidth; const tileH = this.gridConfig.isoTileHeight; const scale = CONFIG.componentPolyScale; const points = [ { x: newCoords.x, y: newCoords.y - tileH * scale }, { x: newCoords.x + tileW * scale, y: newCoords.y }, { x: newCoords.x, y: newCoords.y + tileH * scale }, { x: newCoords.x - tileW * scale, y: newCoords.y } ]; if (visuals.poly) visuals.poly.destroy(); const cellData = this.grid[row][col]; const color = cellData.isProcessing ? CONFIG.colors.processing : cellData.originalColor; visuals.poly = this.add.polygon(0, 0, points, color).setOrigin(0,0).setPosition(0, 0).setStrokeStyle(1, CONFIG.colors.componentDefaultStroke, 0.8); if (visuals.label) { visuals.label.setPosition(newCoords.x, newCoords.y + tileH * CONFIG.componentLabelYOffsetFactor); } const depth = (row + col) * CONFIG.depthStep; visuals.poly.setDepth(depth); if (visuals.label) visuals.label.setDepth(depth + CONFIG.itemDepthOffset); visuals.poly.setData('gridPos', { row, col }); if (visuals.label) visuals.label.setData('gridPos', { row, col }); });
+            }
+            handleGridClick(pointer) { /* ... (same as before) ... */
+                if (!selectedComponentType) return; const gridCoords = this.getGridCoordsFromIsoWorld(pointer.worldX, pointer.worldY); if (gridCoords) { const { row, col } = gridCoords; if (this.grid[row][col].type === ComponentType.NONE) { if (currentMoney >= selectedComponentCost) { this.placeComponent(row, col, selectedComponentType, selectedComponentCost); } else { this.showTemporaryStatus('Status: Not enough money!'); } } else { this.showTemporaryStatus('Status: Cell occupied!'); } }
+            }
+            placeComponent(row, col, typeEnum, cost) { /* ... (same as before) ... */
+                 const componentName = Object.keys(componentTypeMap).find(key => componentTypeMap[key] === typeEnum); console.log(`Placing ${componentName} at (${row}, ${col}) for $${cost}`); const cellData = this.grid[row][col]; cellData.type = typeEnum; cellData.isProcessing = false; const originalColor = componentColorMap[typeEnum] || 0x888888; cellData.originalColor = originalColor; currentMoney -= cost; updateMoneyDisplay(); const worldCoords = this.getIsoWorldCoords(row, col); const tileW = this.gridConfig.isoTileWidth; const tileH = this.gridConfig.isoTileHeight; const scale = CONFIG.componentPolyScale; const points = [ { x: worldCoords.x, y: worldCoords.y - tileH * scale }, { x: worldCoords.x + tileW * scale, y: worldCoords.y }, { x: worldCoords.x, y: worldCoords.y + tileH * scale }, { x: worldCoords.x - tileW * scale, y: worldCoords.y } ]; const componentPoly = this.add.polygon(0, 0, points, originalColor).setOrigin(0,0).setPosition(0, 0).setStrokeStyle(1, CONFIG.colors.componentDefaultStroke, 0.8); const labelText = componentName.substring(0, 4); const label = this.add.text( worldCoords.x, worldCoords.y + tileH * CONFIG.componentLabelYOffsetFactor, labelText, { fontSize: CONFIG.componentLabelFontSize, color: CONFIG.colors.labelDefault, fontStyle: 'bold', align: 'center', stroke: CONFIG.colors.labelStroke, strokeThickness: CONFIG.componentLabelStrokeThickness } ).setOrigin(0.5); const depth = (row + col) * CONFIG.depthStep; componentPoly.setDepth(depth); label.setDepth(depth + CONFIG.itemDepthOffset); const visualKey = `${row}-${col}`; componentPoly.setData('gridPos', { row, col }); label.setData('gridPos', { row, col }); this.componentVisuals.set(visualKey, { poly: componentPoly, label: label }); deselectComponent(); this.showTemporaryStatus('Status: Component placed!');
+            }
+             spawnWorkItem() { /* ... (same as before) ... */
+                const equation = `${Math.floor(Math.random() * 100)} + ${Math.floor(Math.random() * 100)}`; const newItem = new WorkItem(this.nextWorkItemId++, equation); const spawnCoords = this.getIsoWorldCoords(0, -1); const itemSprite = this.add.image(spawnCoords.x, spawnCoords.y, CONFIG.workItemSpriteKey); itemSprite.setScale(CONFIG.workItemScale); itemSprite.setData('gridPos', { row: -1, col: -1 }); this.workItems.push(newItem); this.workItemSprites.set(newItem, itemSprite); console.log(`Spawned Work Item ${newItem.id}: ${newItem.equation}`); this.showTemporaryStatus(`Status: New equation received!`); newItem.findNextTarget(this);
+            }
+            getAdjacentCells(row, col) { /* ... (same as before) ... */
+                const adjacent = []; const deltas = [ { dr: -1, dc: 0 }, { dr: 1, dc: 0 }, { dr: 0, dc: -1 }, { dr: 0, dc: 1 } ]; deltas.forEach(delta => { const nr = row + delta.dr; const nc = col + delta.dc; if (nr >= 0 && nr < this.gridConfig.rows && nc >= 0 && nc < this.gridConfig.cols) { adjacent.push({ row: nr, col: nc }); } }); return adjacent;
+            }
+            findAndOccupyComponent(workItem, currentGridPos, requiredType) { /* ... (same as before) ... */
+                const startRow = currentGridPos ? currentGridPos.row : -1; const startCol = currentGridPos ? currentGridPos.col : -1; let targetCellCoords = null; if (startRow === -1 && requiredType === ComponentType.PREPROCESSOR) { for (let r = 0; r < this.gridConfig.rows; r++) { for (let c = 0; c < this.gridConfig.cols; c++) { const cellData = this.grid[r][c]; if (cellData.type === requiredType && !cellData.isProcessing) { targetCellCoords = { row: r, col: c }; break; } } if (targetCellCoords) break; } } else if (currentGridPos) { const adjacent = this.getAdjacentCells(startRow, startCol); for (const cell of adjacent) { const { row, col } = cell; const cellData = this.grid[row][col]; if (cellData.type === requiredType && !cellData.isProcessing) { targetCellCoords = { row, col }; break; } } } if (targetCellCoords) { const { row, col } = targetCellCoords; const targetCellData = this.grid[row][col]; targetCellData.isProcessing = true; targetCellData.workItemId = workItem.id; const visualKey = `${row}-${col}`; const visuals = this.componentVisuals.get(visualKey); if (visuals && visuals.poly) { visuals.poly.setFillStyle(CONFIG.colors.processing, 1); } else { console.warn(`Component visuals missing at (${row}, ${col}) during occupy.`); } console.log(`Work Item ${workItem.id} targeting ${componentStageName[requiredType]} at (${row}, ${col})`); return targetCellCoords; } return null;
+            }
+            releaseComponent(row, col) { /* ... (same as before) ... */
+                if (row >= 0 && row < this.gridConfig.rows && col >= 0 && col < this.gridConfig.cols) { const cellData = this.grid[row][col]; if (cellData.isProcessing) { console.log(`Releasing component at (${row}, ${col}) used by item ${cellData.workItemId}`); cellData.isProcessing = false; cellData.workItemId = null; const visualKey = `${row}-${col}`; const visuals = this.componentVisuals.get(visualKey); if (visuals && visuals.poly) { visuals.poly.setFillStyle(cellData.originalColor, 1); } else { console.warn(`Component visuals missing at (${row}, ${col}) during release.`); } } }
+            }
+             completeWorkItem(item, result) { /* ... (same as before) ... */
+                 console.log(`Work Item ${item.id} completed. Result: ${result}`); const profit = CONFIG.workItemProfitBase + Math.floor(Math.random() * (CONFIG.workItemProfitRandom + 1)); currentMoney += profit; updateMoneyDisplay(); item.state = 'completed'; this.showTemporaryStatus(`Status: Equation solved! +$${profit}`);
+             }
+            failWorkItem(item, reason) { /* ... (same as before) ... */
+                console.warn(`Work Item ${item.id} failed: ${reason}`); const penalty = CONFIG.workItemFailurePenaltyBase + Math.floor(Math.random() * (CONFIG.workItemFailurePenaltyRandom + 1)); currentMoney -= penalty; updateMoneyDisplay(); item.state = 'failed'; this.showTemporaryStatus(`Status: Processing failed! -$${penalty}`); if (item.gridPos && this.grid[item.gridPos.row]?.[item.gridPos.col]?.workItemId === item.id) { this.releaseComponent(item.gridPos.row, item.gridPos.col); }
+             }
+             showTemporaryStatus(message) { /* ... (same as before) ... */
+                 this.statusText.setText(message); const currentMessage = message; this.time.delayedCall(CONFIG.statusTextClearDelay, () => { if (this.statusText.text === currentMessage) { this.statusText.setText('Status: Ready'); } });
+             }
+
+        } // --- End of GameScene ---
+
+        // --- WorkItem Class ---
+        class WorkItem { // ... (WorkItem class remains largely the same) ...
+            constructor(id, equation) { this.id = id; this.equation = equation; this.currentStage = ComponentType.PREPROCESSOR; this.state = 'idle'; this.gridPos = null; this.targetPos = null; this.processingTimer = null; this.moveTween = null; this.searchCooldown = 0; }
+            update(time, delta, scene) { if (this.state === 'completed' || this.state === 'failed') return; if (this.searchCooldown > 0) { this.searchCooldown -= delta; return; } if (this.state === 'idle') { this.findNextTarget(scene); } }
+            findNextTarget(scene) { if (!this.currentStage) { scene.failWorkItem(this, "Invalid state: No current stage"); return; } const targetCoords = scene.findAndOccupyComponent(this, this.gridPos, this.currentStage); if (targetCoords) { this.targetPos = targetCoords; this.state = 'moving'; this.moveToTarget(scene); } else { this.state = 'idle'; this.searchCooldown = CONFIG.searchCooldownBase + Math.random() * CONFIG.searchCooldownRandom; } }
+            moveToTarget(scene) { const sprite = scene.workItemSprites.get(this); if (!sprite || !this.targetPos) { scene.failWorkItem(this, "Movement error"); return; } const targetWorldCoords = scene.getIsoWorldCoords(this.targetPos.row, this.targetPos.col); targetWorldCoords.y += scene.gridConfig.isoTileHeight * CONFIG.workItemYOffsetFactor; const distance = Phaser.Math.Distance.Between(sprite.x, sprite.y, targetWorldCoords.x, targetWorldCoords.y); const duration = distance * 12; if (this.moveTween) this.moveTween.stop();
+                this.moveTween = scene.tweens.add({ targets: sprite, x: targetWorldCoords.x, y: targetWorldCoords.y, duration: Math.max(duration, 300), ease: 'Linear', onUpdate: () => { const currentGridPos = scene.getGridCoordsFromIsoWorld(sprite.x, sprite.y); sprite.setData('gridPos', currentGridPos || { row: -1, col: -1 }); }, onComplete: () => { if (this.state !== 'failed') { this.state = 'processing'; this.gridPos = this.targetPos; sprite.setData('gridPos', this.gridPos); this.targetPos = null; this.startProcessing(scene); } this.moveTween = null; } });
+            }
+            startProcessing(scene) { if (this.state !== 'processing') return; const processingTime = this.getProcessingTime(); console.log(`Work Item ${this.id} starting ${componentStageName[this.currentStage]} for ${processingTime}ms at (${this.gridPos.row}, ${this.gridPos.col})`); if (this.processingTimer) this.processingTimer.remove(); this.processingTimer = scene.time.delayedCall(processingTime, () => { if (this.state === 'processing') { this.finishProcessing(scene); } this.processingTimer = null; }, [], scene); }
+            getProcessingTime() { const baseTime = CONFIG.processingTimes[this.currentStage] || 500; const randomVariance = (Math.random() * 2 - 1) * CONFIG.processingTimes.randomFactor; return baseTime * (1 + randomVariance); }
+            finishProcessing(scene) { if (this.state !== 'processing') { console.warn(`WorkItem ${this.id}: finishProcessing called but state is ${this.state}`); return; } console.log(`Work Item ${this.id} finished ${componentStageName[this.currentStage]} at (${this.gridPos.row}, ${this.gridPos.col})`); scene.releaseComponent(this.gridPos.row, this.gridPos.col); const next = nextStage[this.currentStage]; if (next) { this.currentStage = next; this.state = 'idle'; this.searchCooldown = 50 + Math.random() * 50; } else { try { const safeEquation = this.equation.replace(/[^-()\d/*+.]/g, ''); const result = math.evaluate(safeEquation); scene.completeWorkItem(this, result); } catch (e) { console.error(`Evaluation error for item ${this.id} (${this.equation}):`, e); scene.failWorkItem(this, `Evaluation error`); } } }
+        } // --- End of WorkItem Class ---
+
+        // --- Global Helper Functions ---
+        function updateMoneyDisplay() { /* ... (same as before) ... */
+             moneyDisplayElement.textContent = `$${currentMoney}`; document.querySelectorAll('.component-button').forEach(button => { const cost = componentCosts[button.dataset.type]; button.disabled = currentMoney < cost; });
+        }
+        function selectComponent(type, cost, buttonElement) { /* ... (same as before) ... */
+             deselectComponent(); selectedComponentType = componentTypeMap[type]; selectedComponentCost = cost; buttonElement.classList.add('selected');
+        }
+        function deselectComponent() { /* ... (same as before) ... */
+              if (selectedComponentType !== null) { } selectedComponentType = null; selectedComponentCost = 0; document.querySelectorAll('.component-button.selected').forEach(btn => { btn.classList.remove('selected'); });
+        }
+
+        // --- Phaser Game Configuration ---
+        const phaserConfig = { /* ... (same as before, uses CONFIG) ... */
+            type: Phaser.AUTO, width: CONFIG.gameWidth, height: CONFIG.gameHeight, parent: 'game-container', backgroundColor: CONFIG.backgroundColor, physics: { default: 'arcade', arcade: { gravity: { y: 0 } } }, scene: [GameScene]
+        };
+        // --- Initialize Phaser Game ---
+        const game = new Phaser.Game(phaserConfig);
+        // --- Setup Control Panel Buttons & Sliders ---
+        const buttonsContainer = document.getElementById('component-buttons-container'); /* ... (same as before) ... */
+        CONFIG.componentSetup.forEach(comp => { const button = document.createElement('button'); button.classList.add('component-button'); button.dataset.type = comp.name; button.textContent = `${comp.name} ($${comp.cost})`; button.addEventListener('click', () => { if (selectedComponentType === comp.type) { deselectComponent(); } else if (!button.disabled) { selectComponent(comp.name, comp.cost, button); } else { console.warn(`Cannot select ${comp.name}, not enough money or button disabled.`); } }); buttonsContainer.appendChild(button); });
+        document.getElementById('cancel-placement').addEventListener('click', deselectComponent);
+        updateMoneyDisplay(); // Initialize money display and button states
+
+    </script>
+
+</body>
+</html>
